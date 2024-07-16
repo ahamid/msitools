@@ -2,6 +2,7 @@ using Posix;
 
 static bool version;
 static bool list_only;
+static bool verbose;
 [CCode (array_length = false, array_null_terminated = true)]
 static string[] files;
 static string? directory = null;
@@ -10,6 +11,7 @@ private const OptionEntry[] options = {
     { "version", 0, 0, OptionArg.NONE, ref version, N_("Display version number"), null },
     { "directory", 'C', 0, OptionArg.FILENAME, ref directory, N_("Extract to directory"), null },
     { "list", 'l', 0, OptionArg.NONE, ref list_only, N_("List files only"), null },
+    { "verbose", 'v', 0, OptionArg.NONE, ref verbose, N_("Verbose"), null },
     { "", 0, 0, OptionArg.FILENAME_ARRAY, ref files, null, N_("MSI_FILE...") },
     { null }
 };
@@ -41,8 +43,14 @@ public string lookup_cab (string dir, string cab) throws GLib.Error
     return path.get_child (cab).get_path ();
 }
 
+bool has_bits(uint32 value, int bits) {
+    return (value & bits) == bits;
+}
+
 public void extract_cab (Libmsi.Database db, string cab,
-                         HashTable<string, string> cab_to_name) throws GLib.Error
+                         HashTable<string, string> cab_to_name,
+                         bool list_only,
+                         bool verbose) throws GLib.Error
 {
     var cabinet = new GCab.Cabinet ();
 
@@ -73,8 +81,26 @@ public void extract_cab (Libmsi.Database db, string cab,
                 warning ("couldn't lookup MSI name, fallback on cab name %s", extname);
             }
             current.set_extract_name (extname);
-            GLib.stdout.printf ("%s\n", extname);
-            return true;
+            if (verbose) {
+                var datetime = current.get_date_time ();
+                var attributes = current.get_attributes ();
+                var size = current.get_size ();
+                GLib.stdout.printf (
+                    "%s\t%c%c%c%c%c%c\t%20" + uint32.FORMAT + "\t%s\n",
+                    datetime.format_iso8601 (),
+                    has_bits(attributes, GCab.FileAttribute.RDONLY) ? 'R' : '.',
+                    has_bits(attributes, GCab.FileAttribute.HIDDEN) ? 'H' : '.',
+                    has_bits(attributes, GCab.FileAttribute.SYSTEM) ? 'S' : '.',
+                    has_bits(attributes, GCab.FileAttribute.ARCH) ? 'A' : '.',
+                    has_bits(attributes, GCab.FileAttribute.EXEC) ? 'X' : '.',
+                    has_bits(attributes, GCab.FileAttribute.NAME_IS_UTF) ? 'U' : '.',
+                    size,
+                    extname
+                );
+            } else {
+                GLib.stdout.printf ("%s\n", extname);
+            }
+            return !list_only;
         }, null);
 }
 
@@ -131,12 +157,12 @@ public void extract (string filename) throws GLib.Error {
     while ((rec = query.fetch ()) != null) {
         var dir = components_dir.lookup (rec.get_string (2));
         var file = Path.build_filename (dir, get_long_name (rec.get_string (3)));
-        if (list_only)
+        if (list_only && !verbose)
             GLib.stdout.printf ("%s\n", file);
         cab_to_name.insert (rec.get_string (1), file);
     }
 
-    if (list_only)
+    if (list_only && !verbose)
         exit (0);
 
     query = new Libmsi.Query (db, "SELECT * FROM `Media`");
@@ -147,7 +173,7 @@ public void extract (string filename) throws GLib.Error {
             // Ignore empty cab names
             continue;
         }
-        extract_cab (db, cab, cab_to_name);
+        extract_cab (db, cab, cab_to_name, list_only, verbose);
     }
 }
 
